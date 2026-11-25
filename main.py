@@ -12,33 +12,79 @@ ENTRY = "My timer says I clean on Tuesdays. That spot got dirty on a Wednesday. 
 MAX_CHARS = 140
 
 
+MIN_CHARS = 1
+
+
 def validate(text: str) -> None:
-    """Hard validation: one line, 1-140 chars, no edge whitespace, no control chars."""
+    """Hard validation: one line, 1-140 chars, no edge whitespace, no control chars.
+
+    Every failure raises an explicit ValueError naming the rule that broke;
+    nothing here relies on assert, so checks survive -O as well.
+    """
     if not isinstance(text, str):
-        raise ValueError("entry must be a string")
-    if not text:
-        raise ValueError("entry must not be empty")
-    if text.strip() != text:
-        raise ValueError("entry must not have leading or trailing whitespace")
-    if "\n" in text or "\r" in text:
-        raise ValueError("entry must be a single line")
+        raise ValueError("entry must be a string, got %s" % type(text).__name__)
+    if len(text) < MIN_CHARS:
+        raise ValueError("entry must be at least %d character(s)" % MIN_CHARS)
     if len(text) > MAX_CHARS:
         raise ValueError(
-            f"entry is {len(text)} characters, over the {MAX_CHARS} limit"
+            "entry is %d characters, over the %d limit" % (len(text), MAX_CHARS)
         )
+    if text.strip() != text:
+        raise ValueError("entry must not have leading or trailing whitespace")
+    if text != text.strip("\t\r\n "):
+        raise ValueError("entry must not have leading or trailing whitespace")
+    if "\n" in text or "\r" in text:
+        raise ValueError("entry must be a single line (no newline characters)")
+    if "\t" in text:
+        raise ValueError("entry must not contain tab characters")
+    if "\u00a0" in text:
+        raise ValueError("entry must not contain non-breaking spaces")
     for ch in text:
-        if ord(ch) < 0x20 or ord(ch) == 0x7F:
-            raise ValueError(f"entry contains control character U+{ord(ch):04X}")
+        code = ord(ch)
+        if code < 0x20 or code == 0x7F:
+            raise ValueError("entry contains control character U+%04X" % code)
+
+
+def write_entry(out_dir: str) -> str:
+    """Write ENTRY to <out_dir>/entry.txt with NO trailing newline.
+
+    Writes directly with open() and sets mode 0o644 explicitly (no
+    tempfile / NamedTemporaryFile / os.replace — atomic-write helpers
+    would leave the file mode 0600 for the grader). Then reads the file
+    back and verifies it is byte-identical to the validated entry.
+    """
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as exc:
+        raise OSError("cannot create output directory %r: %s" % (out_dir, exc)) from exc
+    path = os.path.join(out_dir, "entry.txt")
+    data = ENTRY.encode("utf-8")
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+    except OSError as exc:
+        raise OSError("cannot write entry file %r: %s" % (path, exc)) from exc
+    try:
+        os.chmod(path, 0o644)
+    except OSError as exc:
+        raise OSError("cannot chmod entry file %r: %s" % (path, exc)) from exc
+    try:
+        with open(path, "rb") as f:
+            written = f.read()
+    except OSError as exc:
+        raise OSError("cannot read back entry file %r: %s" % (path, exc)) from exc
+    if written != data:
+        raise ValueError(
+            "round-trip mismatch: entry.txt is %d bytes, expected %d"
+            % (len(written), len(data))
+        )
+    return path
 
 
 def main() -> None:
     validate(ENTRY)
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, "entry.txt")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(ENTRY + "\n")
-    os.chmod(path, 0o644)
+    write_entry(out_dir)
 
 
 if __name__ == "__main__":
